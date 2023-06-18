@@ -1,190 +1,106 @@
-from utils import *
+from statistics import mean, stdev
+import os
+from collections import defaultdict
 
 class DataSet:
     """
-    A data set for a machine learning problem. It has the following fields:
+    Clase para definir un conjunto de datos. Tiene los siguientes campos:
 
-    d.examples   A list of examples. Each one is a list of attribute values.
-    d.attrs      A list of integers to index into an example, so example[attr]
-                 gives a value. Normally the same as range(len(d.examples[0])).
-    d.attr_names Optional list of mnemonic names for corresponding attrs.
-    d.target     The attribute that a learning algorithm will try to predict.
-                 By default the final attribute.
-    d.inputs     The list of attrs without the target.
-    d.values     A list of lists: each sublist is the set of possible
-                 values for the corresponding attribute. If initially None,
-                 it is computed from the known examples by self.set_problem.
-                 If not None, an erroneous value raises ValueError.
-    d.distance   A function from a pair of examples to a non-negative number.
-                 Should be symmetric, etc. Defaults to mean_boolean_error
-                 since that can handle any field types.
-    d.name       Name of the data set (for output display only).
-    d.source     URL or other source where the data came from.
-    d.exclude    A list of attribute indexes to exclude from d.inputs. Elements
-                 of this list can either be integers (attrs) or attr_names.
+    d.examples   Una lista de ejemplos. Cada uno es una lista de valores de atributos.
+    d.attrs      Una lista de enteros para indexar un ejemplo, por lo que example[attr]
+                 devuelve un valor. Normalmente es lo mismo que range(len(d.examples[0])).
 
-    Normally, you call the constructor and you're done; then you just
-    access fields like d.examples and d.target and d.inputs.
+    d.target     El atributo que el algoritmo de aprendizaje intentará predecir.
+                 Por defecto es el último atributo.
+    d.inputs     La lista de atributos sin el objetivo.
+    d.values     Una lista de listas: cada sublista es el conjunto de valores posibles
+                 para el atributo correspondiente. Si inicialmente es None,
+                 se calcula a partir de los ejemplos conocidos mediante self.set_problem.
+                 Si no es None, un valor erróneo genera ValueError.
+
+    d.name       Nombre del conjunto de datos (solo para mostrar en la salida).
+
+    Normalmente, se llama al constructor y ya está; luego solo se accede a los campos como d.examples y d.target y d.inputs.
     """
 
-    def __init__(self, examples=None, attrs=None, attr_names=None, target=-1, inputs=None,
-                 values=None, distance=mean_boolean_error, name='', source='', exclude=()):
+    def __init__(self, name = '', target = -1):
         """
-        Accepts any of DataSet's fields. Examples can also be a
-        string or file from which to parse examples using parse_csv.
-        Optional parameter: exclude, as documented in .set_problem().
-        >>> DataSet(examples='1, 2, 3')
-        <DataSet(): 1 examples, 3 attributes>
+        Constructor
         """
         self.name = name
-        self.source = source
-        self.values = values
-        self.distance = distance
-        self.got_values_flag = bool(values)
 
-        # initialize .examples from string or list or data directory
-        if isinstance(examples, str):
-            self.examples = parse_csv(examples)
-        elif examples is None:
-            self.examples = parse_csv(open_data(name + '.csv').read())
+        # Inicializar los ejemplos
+        self.examples = parse_csv(open(os.path.join(os.path.dirname(__file__), *['datasets', name]), mode='r').read())
+
+        # los attrs son los índices de los ejemplos.
+        self.attrs = list(range(len(self.examples[0])))
+            
+        if target < 0:
+            self.target = len(self.attrs) + target
         else:
-            self.examples = examples
+            self.target = target
 
-        # attrs are the indices of examples, unless otherwise stated.
-        if self.examples is not None and attrs is None:
-            attrs = list(range(len(self.examples[0])))
+        self.inputs = [a for a in self.attrs if a != self.target]
 
-        self.attrs = attrs
-
-        # initialize .attr_names from string, list, or by default
-        if isinstance(attr_names, str):
-            self.attr_names = attr_names.split()
-        else:
-            self.attr_names = attr_names or attrs
-        self.set_problem(target, inputs=inputs, exclude=exclude)
-
-    def set_problem(self, target, inputs=None, exclude=()):
-        """
-        Set (or change) the target and/or inputs.
-        This way, one DataSet can be used multiple ways. inputs, if specified,
-        is a list of attributes, or specify exclude as a list of attributes
-        to not use in inputs. Attributes can be -n .. n, or an attr_name.
-        Also computes the list of possible values, if that wasn't done yet.
-        """
-        self.target = self.attr_num(target)
-        exclude = list(map(self.attr_num, exclude))
-        if inputs:
-            self.inputs = remove_all(self.target, inputs)
-        else:
-            self.inputs = [a for a in self.attrs if a != self.target and a not in exclude]
-        if not self.values:
-            self.update_values()
-        self.check_me()
-
-    def check_me(self):
-        """Check that my fields make sense."""
-        assert len(self.attr_names) == len(self.attrs)
+        self.values = list(map(unique, zip(*self.examples)))
+        
+        """Comprueba que mis campos tengan sentido."""
         assert self.target in self.attrs
         assert self.target not in self.inputs
         assert set(self.inputs).issubset(set(self.attrs))
-        if self.got_values_flag:
-            # only check if values are provided while initializing DataSet
-            list(map(self.check_example, self.examples))
-
-    def add_example(self, example):
-        """Add an example to the list of examples, checking it first."""
-        self.check_example(example)
-        self.examples.append(example)
-
-    def check_example(self, example):
-        """Raise ValueError if example has any invalid values."""
-        if self.values:
-            for a in self.attrs:
-                if example[a] not in self.values[a]:
-                    raise ValueError('Bad value {} for attribute {} in {}'
-                                     .format(example[a], self.attr_names[a], example))
-
-    def attr_num(self, attr):
-        """Returns the number used for attr, which can be a name, or -n .. n-1."""
-        if isinstance(attr, str):
-            return self.attr_names.index(attr)
-        elif attr < 0:
-            return len(self.attrs) + attr
-        else:
-            return attr
-
-    def update_values(self):
-        self.values = list(map(unique, zip(*self.examples)))
-
-    def sanitize(self, example):
-        """Return a copy of example, with non-input attributes replaced by None."""
-        return [attr_i if i in self.inputs else None for i, attr_i in enumerate(example)]
-
-    def classes_to_numbers(self, classes=None):
-        """Converts class names to numbers."""
-        if not classes:
-            # if classes were not given, extract them from values
-            classes = sorted(self.values[self.target])
-        for item in self.examples:
-            item[self.target] = classes.index(item[self.target])
-
-    def remove_examples(self, value=''):
-        """Remove examples that contain given value."""
-        self.examples = [x for x in self.examples if value not in x]
-        self.update_values()
-
-    def split_values_by_classes(self):
-        """Split values into buckets according to their class."""
-        buckets = defaultdict(lambda: [])
-        target_names = self.values[self.target]
-
-        for v in self.examples:
-            item = [a for a in v if a not in target_names]  # remove target from item
-            buckets[v[self.target]].append(item)  # add item to bucket of its class
-
-        return buckets
 
     def find_means_and_deviations(self):
         """
-        Finds the means and standard deviations of self.dataset.
-        means     : a dictionary for each class/target. Holds a list of the means
-                    of the features for the class.
-        deviations: a dictionary for each class/target. Holds a list of the sample
-                    standard deviations of the features for the class.
+        Encuentra las medias y desviaciones estándar del dataset.
+        medias:         Diccionario que contiene una lista de las medias de los inputs para la clase.
+        desviaciones:   Diccionario que contiene una lista de las desviaciones estándar de los inputs para la clase.
         """
-        target_names = self.values[self.target]
-        feature_numbers = len(self.inputs)
+        etiquetas_de_clase = self.values[self.target]
+        total_de_inputs = len(self.inputs)
 
-        item_buckets = self.split_values_by_classes()
+        items = defaultdict(lambda: [])
 
-        means = defaultdict(lambda: [0] * feature_numbers)
-        deviations = defaultdict(lambda: [0] * feature_numbers)
+        for ejemplo in self.examples:
+            items[ejemplo[self.target]].append([a for a in ejemplo if a not in etiquetas_de_clase])
 
-        for t in target_names:
-            # find all the item feature values for item in class t
-            features = [[] for _ in range(feature_numbers)]
-            for item in item_buckets[t]:
-                for i in range(feature_numbers):
-                    features[i].append(item[i])
+        medias = defaultdict(lambda: [0] * total_de_inputs)
+        desviaciones = defaultdict(lambda: [0] * total_de_inputs)
 
-            # calculate means and deviations fo the class
-            for i in range(feature_numbers):
-                means[t][i] = mean(features[i])
-                deviations[t][i] = stdev(features[i])
+        for t in etiquetas_de_clase:
+            # Encontrar todos los valores de características del elemento para la clase t
+            caracteristicas = [[] for _ in range(total_de_inputs)]
+            for item in items[t]:
+                for i in range(total_de_inputs):
+                    caracteristicas[i].append(item[i])
 
-        return means, deviations
+            # Calcular las medias y desviaciones para la clase
+            for i in range(total_de_inputs):
+                medias[t][i] = mean(caracteristicas[i])
+                desviaciones[t][i] = stdev(caracteristicas[i])
+
+        return medias, desviaciones
 
     def __repr__(self):
-        return '<DataSet({}): {:d} examples, {:d} attributes>'.format(self.name, len(self.examples), len(self.attrs))
+        return '<DataSet({}): {:d} ejemplos, {:d} atributos>'.format(self.name, len(self.examples), len(self.attrs))
 
-def parse_csv(input, delim=','):
+
+def parse_csv(input, delimitador = ','):
     """
-    Input is a string consisting of lines, each line has comma-delimited
-    fields. Convert this into a list of lists. Blank lines are skipped.
-    Fields that look like numbers are converted to numbers.
-    The delim defaults to ',' but '\t' and None are also reasonable values.
-    >>> parse_csv('1, 2, 3 \n 0, 2, na')
-    [[1, 2, 3], [0, 2, 'na']]
+    Función para convertir archivos .csv en una lista de listas
     """
-    lines = [line for line in input.splitlines() if line.strip()]
-    return [list(map(num_or_str, line.split(delim))) for line in lines]
+    archivo = [linea for linea in input.splitlines() if linea.strip()]
+    return [list(map(convierte_a_numero, linea.split(delimitador))) for linea in archivo]
+
+def convierte_a_numero(x):
+    """El argumento es una cadena; convierte a número si es posible, o elimina los espacios."""
+    try:
+        return int(x)
+    except ValueError:
+        try:
+            return float(x)
+        except ValueError:
+            return str(x).strip()
+
+def unique(lista):
+    """Elimina los elementos duplicados de seq. Supone que los elementos son hashables."""
+    return list(set(lista))

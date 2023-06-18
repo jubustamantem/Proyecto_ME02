@@ -1,151 +1,112 @@
-from utils import *
+import numpy as np
+import pandas as pd
+from tabulate import tabulate
+import shutil
 
-"""Learning probabilistic models. (Chapters 20)"""
+class Distribucion_Valores_Observados:
 
-class CountingProbDist:
-    """
-    A probability distribution formed by observing and counting examples.
-    If p is an instance of this class and o is an observed value, then
-    there are 3 main operations:
-    p.add(o) increments the count for observation o by 1.
-    p.sample() returns a random element from the distribution.
-    p[o] returns the probability for o (as in a regular ProbDist).
-    """
+    """Distribución de probabilidad formada al observar y contar ejemplos."""
 
-    def __init__(self, observations=None, default=0):
-        """
-        Create a distribution, and optionally add in some observations.
-        By default this is an unsmoothed distribution, but saying default=1,
-        for example, gives you add-one smoothing.
-        """
-        if observations is None:
-            observations = []
-        self.dictionary = {}
-        self.n_obs = 0
-        self.default = default
-        self.sampler = None
+    def __init__(self, iniciales = []):
+        """Constructor: crea una distribución, inicializa el total en 0 y agrega las observaciones inciales."""
+        self.distribucion = {}
+        self.total_observaciones = 0
 
-        for o in observations:
-            self.add(o)
+        for observacion in iniciales:
+            self.agregar(observacion)
 
-    def add(self, o):
-        """Add an observation o to the distribution."""
-        self.smooth_for(o)
-        self.dictionary[o] += 1
-        self.n_obs += 1
-        self.sampler = None
-
-    def smooth_for(self, o):
-        """
-        Include o among the possible observations, whether or not
-        it's been observed yet.
-        """
-        if o not in self.dictionary:
-            self.dictionary[o] = self.default
-            self.n_obs += self.default
-            self.sampler = None
+    def agregar(self, observacion):
+        """Agrega una observación a la distribución y suma uno al total."""
+        if observacion not in self.distribucion:
+            self.distribucion[observacion] = 0
+        self.distribucion[observacion] += 1
+        self.total_observaciones += 1
 
     def __getitem__(self, item):
-        """Return an estimate of the probability of item."""
-        self.smooth_for(item)
-        return self.dictionary[item] / self.n_obs
-
-    # (top() and sample() are not used in this module, but elsewhere.)
-
-    def top(self, n):
-        """Return (count, obs) tuples for the n most frequent observations."""
-        return heapq.nlargest(n, [(v, k) for (k, v) in self.dictionary.items()])
-
-    def sample(self):
-        """Return a random sample from the distribution."""
-        if self.sampler is None:
-            self.sampler = weighted_sampler(list(self.dictionary.keys()), list(self.dictionary.values()))
-        return self.sampler()
+        """Devuelve la probabilidad del item al hacer un llamado de tipo diccionario."""
+        if item not in self.distribucion:
+            self.distribucion[item] = 0
+        return self.distribucion[item] / self.total_observaciones
 
 
-def NaiveBayesLearner(dataset, continuous=True, simple=False):
-    if simple:
-        return NaiveBayesSimple(dataset)
-    if continuous:
-        return NaiveBayesContinuous(dataset)
-    else:
-        return NaiveBayesDiscrete(dataset)
+class ClasificadorNaiveBayesDiscreto:
+
+    def __init__(self, dataset=None):
+        """Constructor: inicializa el dataset."""
+        self.dataset = dataset
+
+        # Traer las etiquetas de clase, por ejemplo 'spam' y 'ham'.
+        self.etiquetas_de_clase = self.dataset.values[self.dataset.target]
+
+        # Crea una distribución de probabilidad para esas etiquetas. Por ejemplo, {spam: 0.5, ham: 0.5}
+        self.distribucion_objetivo = Distribucion_Valores_Observados(self.etiquetas_de_clase)
+
+        # Crea una distribución de probabilidad para cada par (etiqueta, input): P(xi|C)
+        self.distribuciones_atributos = {(c, atributo): Distribucion_Valores_Observados(self.dataset.values[atributo]) for c in self.etiquetas_de_clase for atributo in self.dataset.inputs}
+
+    def entrenar(self):
+        # Iteramos sobre las filas del dataset.
+        for ejemplo in self.dataset.examples:
+
+            # Trae la etiqueta de clase (dice si el mensaje es 'spam' o 'ham').
+            valor_objetivo = ejemplo[self.dataset.target]
+
+            # Agregar una observación a la distribución.
+            self.distribucion_objetivo.agregar(valor_objetivo)
+
+            # Agregar una observación a cada distribución (etiqueta, input): P(xi|C)
+            for attr in self.dataset.inputs:
+                self.distribuciones_atributos[valor_objetivo, attr].agregar(ejemplo[attr])
+
+    def predecir(self, test):
+
+        def probabilidad_clase(valor_objetivo):
+
+            # Inicializar P(C)
+            probabilidad = self.distribucion_objetivo[valor_objetivo]
+
+            # Efectuar productoria P(xi|C)
+            for atributo in self.dataset.inputs:
+                probabilidad *= self.distribuciones_atributos[valor_objetivo, atributo][test[atributo]]
+
+            return probabilidad
+
+        # Elegir el más probable entre las clases.
+        return max(self.etiquetas_de_clase, key = probabilidad_clase)
 
 
-def NaiveBayesSimple(distribution):
-    """
-    A simple naive bayes classifier that takes as input a dictionary of
-    CountingProbDist objects and classifies items according to these distributions.
-    The input dictionary is in the following form:
-        (ClassName, ClassProb): CountingProbDist
-    """
-    target_dist = {c_name: prob for c_name, prob in distribution.keys()}
-    attr_dists = {c_name: count_prob for (c_name, _), count_prob in distribution.items()}
+class ClasificadorNaiveBayesContinuo:
 
-    def predict(example):
-        """Predict the target value for example. Calculate probabilities for each
-        class and pick the max."""
+    def __init__(self, dataset=None):
+        """Constructor: inicializa el dataset."""
+        self.dataset = dataset
 
-        def class_probability(target_val):
-            attr_dist = attr_dists[target_val]
-            return target_dist[target_val] * product(attr_dist[a] for a in example)
+        # Traer las etiquetas de clase, por ejemplo 'spam' y 'ham'.
+        self.etiquetas_de_clase = self.dataset.values[self.dataset.target]
 
-        return max(target_dist.keys(), key=class_probability)
+        # Crea una distribución de probabilidad para esas etiquetas. Por ejemplo, {spam: 0.5, ham: 0.5}
+        self.distribucion_objetivo = Distribucion_Valores_Observados(self.etiquetas_de_clase)
+        
+    def entrenar(self):
+        # Encontrar las medias y desviaciones de los valores de los atributos de entrada para cada etiqueta de clase.
+        self.medias, self.desviaciones = self.dataset.find_means_and_deviations()
 
-    return predict
+    def predecir(self, test):
 
+        def probabilidad_clase(valor_objetivo):
 
-def NaiveBayesDiscrete(dataset):
-    """
-    Just count how many times each value of each input attribute
-    occurs, conditional on the target value. Count the different
-    target values too.
-    """
+            # Inicializar P(C)
+            probabilidad = self.distribucion_objetivo[valor_objetivo]
 
-    target_vals = dataset.values[dataset.target]
-    target_dist = CountingProbDist(target_vals)
-    attr_dists = {(gv, attr): CountingProbDist(dataset.values[attr]) for gv in target_vals for attr in dataset.inputs}
-    for example in dataset.examples:
-        target_val = example[dataset.target]
-        target_dist.add(target_val)
-        for attr in dataset.inputs:
-            attr_dists[target_val, attr].add(example[attr])
+            # Efectuar productoria P(xi|C)
+            for atributo in self.dataset.inputs:
+                probabilidad *= distribucion_normal(self.medias[valor_objetivo][atributo], self.desviaciones[valor_objetivo][atributo], test[atributo])
+            
+            return probabilidad
 
-    def predict(example):
-        """
-        Predict the target value for example. Consider each possible value,
-        and pick the most likely by looking at each attribute independently.
-        """
-
-        def class_probability(target_val):
-            return (target_dist[target_val] * product(attr_dists[target_val, attr][example[attr]]
-                                                      for attr in dataset.inputs))
-
-        return max(target_vals, key=class_probability)
-
-    return predict
-
-
-def NaiveBayesContinuous(dataset):
-    """
-    Count how many times each target value occurs.
-    Also, find the means and deviations of input attribute values for each target value.
-    """
-    means, deviations = dataset.find_means_and_deviations()
-
-    target_vals = dataset.values[dataset.target]
-    target_dist = CountingProbDist(target_vals)
-
-    def predict(example):
-        """Predict the target value for example. Consider each possible value,
-        and pick the most likely by looking at each attribute independently."""
-
-        def class_probability(target_val):
-            prob = target_dist[target_val]
-            for attr in dataset.inputs:
-                prob *= gaussian(means[target_val][attr], deviations[target_val][attr], example[attr])
-            return prob
-
-        return max(target_vals, key=class_probability)
-
-    return predict
+        # Elegir el más probable.
+        return max(self.etiquetas_de_clase, key = probabilidad_clase)
+    
+def distribucion_normal(media, desviacion, x):
+    """Dada la media y la desviación estándar de una distribución, devuelve la probabilidad de x."""
+    return 1 / (desviacion * np.sqrt(2 * np.pi)) * np.e ** ( - (float((x - media) ** 2) / float(2 * (desviacion ** 2))))
